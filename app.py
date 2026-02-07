@@ -136,8 +136,8 @@ if call_data and station_data and len(shape_components) >= 3:
             overlap_perc = (unary_union(inters).area / city_m.area * 100) if inters else 0.0
 
         # --- HEALTH SCORE ---
-        norm_redundancy = min(overlap_perc / 35.0, 1.0) * 100
-        health_score = (cap_perc * 0.50) + (land_perc * 0.30) + (norm_redundancy * 0.20)
+        norm_redundancy = min(overlap_perc / 39.0, 1.0) * 100
+        health_score = (cap_perc * 0.50) + (land_perc * 0.28) + (norm_redundancy * 0.22)
 
         if health_score >= 85: h_color, h_label = "#28a745", "OPTIMAL"
         elif health_score >= 70: h_color, h_label = "#94c11f", "SUFFICIENT"
@@ -234,5 +234,6 @@ DEPLOYED LOCATIONS:
         st.error(f"System Error: {e}")
 else:
     st.info("System Ready: Please upload deployment files above to initialize session.")
+
 
 

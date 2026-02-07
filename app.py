@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 from shapely.geometry import Point, Polygon, MultiPolygon
 from shapely.ops import unary_union
 import os
-import shutil
 import itertools
 
 # --- PAGE CONFIG ---
@@ -168,4 +167,80 @@ if call_data and station_data and len(shape_components) >= 3:
         m3.metric("Redundancy (Target 35%)", f"{overlap_perc:.1f}%")
         m4.metric("Uncovered Calls", f"{len(calls_in_city) - len(all_ids):,}")
 
-        # --- SIDEBAR SCORECARD
+        # --- SIDEBAR SCORECARD ---
+        st.sidebar.markdown("---")
+        with st.sidebar.expander("📝 Tactical Scorecard", expanded=True):
+            summary_text = f"""DRONE DEPLOYMENT ANALYSIS
+---------------------------------
+Jurisdiction: {selection}
+Strategy: {strategy}
+Drones Deployed: {len(active_names)}
+
+PERFORMANCE METRICS:
+- Health Score: {health_score:.1f}% ({h_label})
+- Call Capacity: {cap_perc:.1f}%
+- Land Coverage: {land_perc:.1f}%
+- Redundancy: {overlap_perc:.1f}%
+
+DEPLOYED LOCATIONS:
+""" + "\n".join([f"✅ {name}" for name in active_names])
+            st.text_area("Copy Report for Briefing:", summary_text, height=250)
+
+        # --- THE MAP ---
+        fig = go.Figure()
+        
+        # 1. District Lines
+        for _, row in gdf_all.to_crs(epsg=4326).iterrows():
+            geom = row.geometry
+            p_list = [geom] if isinstance(geom, Polygon) else list(geom.geoms)
+            for p in p_list:
+                bx, by = p.exterior.coords.xy
+                fig.add_trace(go.Scattermap(mode="lines", lon=list(bx), lat=list(by), line=dict(color="#444", width=1), showlegend=False, hoverinfo='skip'))
+        
+        # 2. Incidents (NO HOVER)
+        sample = calls_in_city.to_crs(epsg=4326).sample(min(2000, len(calls_in_city)))
+        fig.add_trace(go.Scattermap(
+            lat=sample.geometry.y, 
+            lon=sample.geometry.x, 
+            mode='markers', 
+            marker=dict(size=4, color='#000080', opacity=0.3), 
+            name="Incidents",
+            hoverinfo='skip'
+        ))
+        
+        # 3. Stations (Split into Ring and Center Dot)
+        all_st_names = df_stations_all['name'].tolist()
+        for s in active_data:
+            # Cycle through the new BRINC colors
+            color = STATION_COLORS[all_st_names.index(s['name']) % len(STATION_COLORS)]
+            angles = np.linspace(0, 2*np.pi, 60)
+            clats = s['lat'] + (2/69.172) * np.sin(angles)
+            clons = s['lon'] + (2/(69.172 * np.cos(np.radians(s['lat'])))) * np.cos(angles)
+            
+            # A) The Ring (No Hover, No Legend Entry)
+            fig.add_trace(go.Scattermap(
+                lat=list(clats) + [clats[0]], 
+                lon=list(clons) + [clons[0]], 
+                mode='lines', 
+                line=dict(color=color, width=4.5), 
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            
+            # B) The Center Dot (Hover Name Enabled, Big Size)
+            fig.add_trace(go.Scattermap(
+                lat=[s['lat']], 
+                lon=[s['lon']], 
+                mode='markers', 
+                marker=dict(size=25, color=color), 
+                name=s['name'],
+                hoverinfo='name'
+            ))
+
+        fig.update_layout(map_style="open-street-map", map_zoom=11, map_center={"lat": city_boundary.centroid.y, "lon": city_boundary.centroid.x}, margin={"r":0,"t":0,"l":0,"b":0}, height=750)
+        st.plotly_chart(fig, width='stretch')
+
+    except Exception as e:
+        st.error(f"System Error: {e}")
+else:
+    st.info("System Ready: Please upload deployment files above to initialize session.")

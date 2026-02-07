@@ -12,12 +12,20 @@ import itertools
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="BPD Drone Logistics Portal", layout="wide", page_icon="🚓")
 
-# --- 1. BRANDING & HEADER ---
+# --- 1. INITIALIZE SESSION STATE ---
+if 'box_open' not in st.session_state:
+    st.session_state.box_open = True
+
+# --- 2. BRANDING & HEADER ---
 BPD_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Boston_Police_Department_Patch.svg/1200px-Boston_Police_Department_Patch.svg.png"
 
 st.sidebar.image(BPD_LOGO_URL, width=150)
 st.sidebar.markdown("### **BPD Tactical Analysis**")
 st.sidebar.caption("Unclassified // For Official Use Only")
+
+if st.sidebar.button("🔄 Reset & Upload New Data"):
+    st.session_state.box_open = True
+    st.rerun()
 
 st.title("🛰️ Strategic Drone Deployment Optimizer")
 st.markdown("#### **Boston Police Department // Operations Research Division**")
@@ -38,14 +46,11 @@ def process_geo_data(shp_path, selection):
         boundary = active_gdf.iloc[0].geometry
     return gdf, active_gdf, boundary, name_col
 
-# --- INITIALIZE VARIABLES ---
+# --- 3. DATA IMPORT & AUTO-CLOSE LOGIC ---
 call_data, station_data, shape_components = None, None, []
 
-# CHANGED: expanded=True so it starts open
-with st.expander("📁 Data Import", expanded=True):
+with st.expander("📁 Secure Data Import", expanded=st.session_state.box_open):
     uploaded_files = st.file_uploader("Upload Incident CSVs and Shapefiles (6 files total)", accept_multiple_files=True)
-
-STATION_COLORS = ["#E6194B", "#3CB44B", "#4363D8", "#F58231", "#911EB4", "#800000", "#333333", "#000075"]
 
 if uploaded_files:
     for f in uploaded_files:
@@ -55,6 +60,15 @@ if uploaded_files:
         elif any(fname.endswith(ext) for ext in ['.shp', '.shx', '.dbf', '.prj']):
             shape_components.append(f)
 
+    # Trigger Auto-Close: Check for 2 CSVs and 4 Shapefile parts
+    if call_data and station_data and len(shape_components) >= 4:
+        if st.session_state.box_open:
+            st.session_state.box_open = False
+            st.rerun()
+
+STATION_COLORS = ["#E6194B", "#3CB44B", "#4363D8", "#F58231", "#911EB4", "#800000", "#333333", "#000075"]
+
+# --- 4. MAIN ANALYSIS ENGINE ---
 if call_data and station_data and len(shape_components) >= 3:
     if not os.path.exists("temp"): os.mkdir("temp")
     for f in shape_components:
@@ -83,7 +97,7 @@ if call_data and station_data and len(shape_components) >= 3:
         calls_in_city = gdf_calls[gdf_calls.within(city_boundary)].to_crs(epsg=epsg_code)
         calls_in_city['point_idx'] = range(len(calls_in_city))
         
-        # --- ANALYSIS ---
+        # --- PRE-CALC STATION DATA ---
         radius_m = 3218.69 
         station_metadata = []
         for i, row in df_stations_all.iterrows():
@@ -96,9 +110,9 @@ if call_data and station_data and len(shape_components) >= 3:
                 'clipped_m': clipped_buf, 'indices': indices
             })
 
-        # --- OPTIMIZER ---
+        # --- 5. OPTIMIZER ---
         st.sidebar.markdown("---")
-        k = st.sidebar.slider("Drones to Deploy", 1, len(station_metadata), min(5, len(station_metadata)))
+        k = st.sidebar.slider("Drones to Deploy", 1, len(station_metadata), min(2, len(station_metadata)))
         strategy = st.sidebar.radio("Optimization Goal", ("Maximize Call Volume", "Maximize Land Equity"))
 
         combos = list(itertools.combinations(range(len(station_metadata)), k))
@@ -117,7 +131,7 @@ if call_data and station_data and len(shape_components) >= 3:
         default_sel = [station_metadata[i]['name'] for i in (best_call_combo if strategy == "Maximize Call Volume" else (best_geo_combo if best_geo_combo != -1 else best_call_combo))]
         active_names = ctrl_col2.multiselect("📡 Current Drone List", options=df_stations_all['name'].tolist(), default=default_sel)
 
-        # --- METRICS ---
+        # --- 6. METRICS ---
         active_data = [s for s in station_metadata if s['name'] in active_names]
         active_indices = [s['indices'] for s in active_data]
         all_ids = set().union(*active_indices) if active_indices else set()
@@ -134,7 +148,7 @@ if call_data and station_data and len(shape_components) >= 3:
 
         st.markdown("---")
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Total Incidents", f"{len(calls_in_city):,}")
+        m1.metric("Total Incident Points", f"{len(calls_in_city):,}")
         m2.metric("Response Capacity", f"{cap_perc:.1f}%")
         m3.metric("Land Covered", f"{land_perc:.1f}%")
         m4.metric("Redundancy", f"{overlap_perc:.1f}%")
@@ -153,8 +167,9 @@ DEPLOYED LOCATIONS:
 """ + "\n".join([f"- {name}" for name in active_names])
             st.text_area("Copy/Paste this report:", summary_text, height=200)
 
-        # --- THE MAP ---
+        # --- 7. THE MAP ---
         fig = go.Figure()
+        # Draw Districts
         for _, row in gdf_all.to_crs(epsg=4326).iterrows():
             geom = row.geometry
             p_list = [geom] if isinstance(geom, Polygon) else list(geom.geoms)
@@ -162,9 +177,11 @@ DEPLOYED LOCATIONS:
                 bx, by = p.exterior.coords.xy
                 fig.add_trace(go.Scattermap(mode="lines", lon=list(bx), lat=list(by), line=dict(color="#444", width=1), showlegend=False, hoverinfo='skip'))
         
+        # Sample Calls
         sample = calls_in_city.to_crs(epsg=4326).sample(min(2000, len(calls_in_city)))
         fig.add_trace(go.Scattermap(lat=sample.geometry.y, lon=sample.geometry.x, mode='markers', marker=dict(size=4, color='#000080', opacity=0.3), name="Incidents"))
         
+        # Station Rings
         all_st_names = df_stations_all['name'].tolist()
         for s in active_data:
             color = STATION_COLORS[all_st_names.index(s['name']) % len(STATION_COLORS)]
@@ -180,4 +197,3 @@ DEPLOYED LOCATIONS:
         st.error(f"Operational Error: {e}")
 else:
     st.info("🚓 BPD Tactical Interface: Please upload deployment files above to initialize session.")
-

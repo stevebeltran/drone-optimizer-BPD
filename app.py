@@ -11,7 +11,7 @@ import itertools
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Citywide Drone Optimizer", layout="wide")
-st.title("🛰️ Tactical Drone Optimizer")
+st.title("🛰️ COS Drone Optimizer")
 
 # --- SPEED OPTIMIZATION: CACHING ---
 @st.cache_data
@@ -174,3 +174,4 @@ if call_data and station_data and len(shape_components) >= 3:
         st.error(f"Error: {e}")
 else:
     st.info("👋 Upload data files to begin tactical analysis.")
+

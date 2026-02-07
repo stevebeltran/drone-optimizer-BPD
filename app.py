@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from shapely.geometry import Point, Polygon, MultiPolygon
 from shapely.ops import unary_union
 import os
+import shutil
 import itertools
 
 # --- PAGE CONFIG ---
@@ -58,17 +59,7 @@ if uploaded_files:
             st.session_state.box_open = False
             st.rerun()
 
-# --- NEW BRINC BRAND COLORS (Cyan, White/Silver, Dark Gray) ---
-STATION_COLORS = [
-    "#00E5FF", # Bright Cyan (Primary Brand Color)
-    "#263238", # Deep Charcoal/Black
-    "#D4F1F4", # Tech White / Pale Cyan
-    "#00B8D4", # Medium Teal
-    "#90A4AE", # Cool Silver/Gray
-    "#00838F", # Dark Cyan
-    "#ECEFF1", # Platinum White
-    "#37474F"  # Midnight Blue gray
-]
+STATION_COLORS = ["#E6194B", "#3CB44B", "#4363D8", "#F58231", "#911EB4", "#800000", "#333333", "#000075"]
 
 # --- 4. MAIN ANALYSIS ENGINE ---
 if call_data and station_data and len(shape_components) >= 3:
@@ -144,9 +135,9 @@ if call_data and station_data and len(shape_components) >= 3:
             inters = [active_bufs[i].intersection(active_bufs[j]) for i in range(len(active_bufs)) for j in range(i+1, len(active_bufs)) if not active_bufs[i].intersection(active_bufs[j]).is_empty]
             overlap_perc = (unary_union(inters).area / city_m.area * 100) if inters else 0.0
 
-        # --- HEALTH SCORE (Boston Standard: 35% = Perfect) ---
-        norm_redundancy = min(overlap_perc / 35.0, 1.0) * 100
-        health_score = (cap_perc * 0.50) + (land_perc * 0.30) + (norm_redundancy * 0.20)
+        # --- HEALTH SCORE ---
+        norm_redundancy = min(overlap_perc / 39.0, 1.0) * 100
+        health_score = (cap_perc * 0.50) + (land_perc * 0.28) + (norm_redundancy * 0.22)
 
         if health_score >= 85: h_color, h_label = "#28a745", "OPTIMAL"
         elif health_score >= 70: h_color, h_label = "#94c11f", "SUFFICIENT"
@@ -164,7 +155,7 @@ if call_data and station_data and len(shape_components) >= 3:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Response Capacity", f"{cap_perc:.1f}%")
         m2.metric("Land Covered", f"{land_perc:.1f}%")
-        m3.metric("Redundancy (Target 35%)", f"{overlap_perc:.1f}%")
+        m3.metric("Redundancy", f"{overlap_perc:.1f}%")
         m4.metric("Uncovered Calls", f"{len(calls_in_city) - len(all_ids):,}")
 
         # --- SIDEBAR SCORECARD ---
@@ -211,7 +202,6 @@ DEPLOYED LOCATIONS:
         # 3. Stations (Split into Ring and Center Dot)
         all_st_names = df_stations_all['name'].tolist()
         for s in active_data:
-            # Cycle through the new BRINC colors
             color = STATION_COLORS[all_st_names.index(s['name']) % len(STATION_COLORS)]
             angles = np.linspace(0, 2*np.pi, 60)
             clats = s['lat'] + (2/69.172) * np.sin(angles)
@@ -219,7 +209,7 @@ DEPLOYED LOCATIONS:
             
             # A) The Ring (No Hover, No Legend Entry)
             fig.add_trace(go.Scattermap(
-                lat=list(clats) + [clats[0]], 
+                lat=list(clats) + [clats[0]], # Close the loop
                 lon=list(clons) + [clons[0]], 
                 mode='lines', 
                 line=dict(color=color, width=4.5), 
@@ -232,7 +222,7 @@ DEPLOYED LOCATIONS:
                 lat=[s['lat']], 
                 lon=[s['lon']], 
                 mode='markers', 
-                marker=dict(size=25, color=color), 
+                marker=dict(size=12, color=color), # Increased Size
                 name=s['name'],
                 hoverinfo='name'
             ))
@@ -244,3 +234,5 @@ DEPLOYED LOCATIONS:
         st.error(f"System Error: {e}")
 else:
     st.info("System Ready: Please upload deployment files above to initialize session.")
+
+

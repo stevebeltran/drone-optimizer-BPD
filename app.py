@@ -11,6 +11,7 @@ import itertools
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Citywide Drone Optimizer", layout="wide")
+st.title("🛰️ Tactical Drone Optimizer")
 
 # --- SPEED OPTIMIZATION: CACHING ---
 @st.cache_data
@@ -18,7 +19,7 @@ def process_geo_data(shp_path, selection):
     gdf = gpd.read_file(shp_path)
     if gdf.crs is None: gdf.set_crs(epsg=4269, inplace=True)
     
-    # Simplify geometry slightly to boost speed (0.0001 degrees)
+    # Simplify geometry for performance (removes heavy coordinate nodes)
     gdf['geometry'] = gdf['geometry'].simplify(0.0001, preserve_topology=True)
     
     name_col = 'DISTRICT' if 'DISTRICT' in gdf.columns else 'NAME'
@@ -36,7 +37,7 @@ def process_geo_data(shp_path, selection):
 call_data, station_data, shape_components = None, None, []
 
 with st.expander("📁 Upload Data Files", expanded=False):
-    uploaded_files = st.file_uploader("Drop files here", accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Drop all 6 files here", accept_multiple_files=True)
 
 STATION_COLORS = ["#E6194B", "#3CB44B", "#4363D8", "#F58231", "#911EB4", "#800000", "#333333", "#000075"]
 
@@ -56,8 +57,6 @@ if call_data and station_data and len(shape_components) >= 3:
     
     try:
         shp_path = [os.path.join("temp", f.name) for f in shape_components if f.name.endswith('.shp')][0]
-        
-        # Determine available districts for the dropdown
         temp_gdf = gpd.read_file(shp_path)
         name_col_init = 'DISTRICT' if 'DISTRICT' in temp_gdf.columns else 'NAME'
         options = ["SHOW ALL DISTRICTS"] + sorted(temp_gdf[name_col_init].unique().tolist())
@@ -66,7 +65,7 @@ if call_data and station_data and len(shape_components) >= 3:
         ctrl_col1, ctrl_col2 = st.columns([1, 2])
         selection = ctrl_col1.selectbox("📍 Jurisdiction Focus", options)
 
-        # USE CACHED GEO PROCESSING
+        # Process Geo with Cache
         gdf_all, active_gdf, city_boundary, name_col = process_geo_data(shp_path, selection)
 
         utm_zone = int((city_boundary.centroid.x + 180) / 6) + 1
@@ -80,15 +79,13 @@ if call_data and station_data and len(shape_components) >= 3:
         calls_in_city = gdf_calls[gdf_calls.within(city_boundary)].to_crs(epsg=epsg_code)
         calls_in_city['point_idx'] = range(len(calls_in_city))
         
-        # --- FAST ANALYSIS ---
-        radius_m = 3218.69 # 2 miles
+        # --- PRE-CALC ANALYSIS ---
+        radius_m = 3218.69 
         station_metadata = []
         for i, row in df_stations_all.iterrows():
             s_pt_m = gpd.GeoSeries([Point(row['lon'], row['lat'])], crs="EPSG:4326").to_crs(epsg=epsg_code).iloc[0]
-            # Fast Spatial Filter
             mask = calls_in_city.geometry.distance(s_pt_m) <= radius_m
             indices = set(calls_in_city[mask]['point_idx'])
-            # Only clip geometry if absolutely necessary for land %
             clipped_buf = s_pt_m.buffer(radius_m).intersection(city_m)
             station_metadata.append({
                 'name': row['name'], 'lat': row['lat'], 'lon': row['lon'],
@@ -101,10 +98,10 @@ if call_data and station_data and len(shape_components) >= 3:
         strategy = st.sidebar.radio("Strategy", ("Max Response Volume", "Max Geographic Equity"))
 
         combos = list(itertools.combinations(range(len(station_metadata)), k))
-        if len(combos) > 600: combos = combos[:600] # Cap combos for speed
+        if len(combos) > 500: combos = combos[:500] 
         
         best_call_combo, max_calls = None, -1
-        best_geo_combo, max_area = None, -1
+        best_geo_combo, max_area = -1, -1
         
         for combo in combos:
             u_set = set().union(*(station_metadata[i]['indices'] for i in combo))
@@ -114,23 +111,42 @@ if call_data and station_data and len(shape_components) >= 3:
                 u_geo = unary_union([station_metadata[i]['clipped_m'] for i in combo])
                 if u_geo.area > max_area: max_area = u_geo.area; best_geo_combo = combo
             
-        default_sel = [station_metadata[i]['name'] for i in (best_call_combo if strategy == "Max Response Volume" else best_geo_combo)]
+        default_sel = [station_metadata[i]['name'] for i in (best_call_combo if strategy == "Max Response Volume" else (best_geo_combo if best_geo_combo != -1 else best_call_combo))]
         active_names = ctrl_col2.multiselect("📡 Active Stations", options=df_stations_all['name'].tolist(), default=default_sel)
 
-        # --- METRICS & MAP ---
+        # --- FINAL METRICS CALCULATION ---
         active_data = [s for s in station_metadata if s['name'] in active_names]
+        active_buffers = [s['clipped_m'] for s in active_data]
         active_indices = [s['indices'] for s in active_data]
+        
+        # 1. Total & Capacity
         all_ids = set().union(*active_indices) if active_indices else set()
         cap_perc = (len(all_ids) / len(calls_in_city)) * 100 if len(calls_in_city) > 0 else 0
+        uncovered = len(calls_in_city) - len(all_ids)
+
+        # 2. Land Coverage & Overlap
+        total_union_geo = unary_union(active_buffers) if active_buffers else None
+        land_perc = (total_union_geo.area / city_m.area * 100) if total_union_geo else 0
+        
+        overlap_perc = 0.0
+        if len(active_buffers) > 1:
+            inters = []
+            for i in range(len(active_buffers)):
+                for j in range(i+1, len(active_buffers)):
+                    over = active_buffers[i].intersection(active_buffers[j])
+                    if not over.is_empty: inters.append(over)
+            overlap_perc = (unary_union(inters).area / city_m.area * 100) if inters else 0.0
 
         st.markdown("---")
-        m1, m2, m3 = st.columns(3)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Incidents", f"{len(calls_in_city):,}")
         m2.metric("Capacity %", f"{cap_perc:.1f}%")
-        m3.metric("Uncovered", f"{len(calls_in_city) - len(all_ids):,}")
+        m3.metric("Land Covered %", f"{land_perc:.1f}%")
+        m4.metric("Overlap %", f"{overlap_perc:.1f}%")
+        m5.metric("Uncovered", f"{uncovered:,}")
 
+        # --- THE MAP ---
         fig = go.Figure()
-        # Draw District Outlines (Simplified for Speed)
         for _, row in gdf_all.to_crs(epsg=4326).iterrows():
             geom = row.geometry
             p_list = [geom] if isinstance(geom, Polygon) else list(geom.geoms)
@@ -138,22 +154,23 @@ if call_data and station_data and len(shape_components) >= 3:
                 bx, by = p.exterior.coords.xy
                 fig.add_trace(go.Scattermap(mode="lines", lon=list(bx), lat=list(by), line=dict(color="#444", width=1), showlegend=False, hoverinfo='skip'))
         
-        # Optimized Scatter (Sample 2000 for speed)
         sample = calls_in_city.to_crs(epsg=4326).sample(min(2000, len(calls_in_city)))
         fig.add_trace(go.Scattermap(lat=sample.geometry.y, lon=sample.geometry.x, mode='markers', marker=dict(size=4, color='#000080', opacity=0.3), name="Incidents"))
         
         def get_circle(lat, lon):
-            angles = np.linspace(0, 2*np.pi, 60) # Fewer points for speed
+            angles = np.linspace(0, 2*np.pi, 60)
             return lat + (2/69.172) * np.sin(angles), lon + (2/(69.172 * np.cos(np.radians(lat)))) * np.cos(angles)
 
         all_st_names = df_stations_all['name'].tolist()
         for s in active_data:
             color = STATION_COLORS[all_st_names.index(s['name']) % len(STATION_COLORS)]
             clats, clons = get_circle(s['lat'], s['lon'])
-            fig.add_trace(go.Scattermap(lat=list(clats) + [None, s['lat']], lon=list(clons) + [None, s['lon']], mode='lines+markers', marker=dict(size=[0]*60 + [18], color=color), line=dict(color=color, width=4), name=s['name']))
+            fig.add_trace(go.Scattermap(lat=list(clats) + [None, s['lat']], lon=list(clons) + [None, s['lon']], mode='lines+markers', marker=dict(size=[0]*60 + [18], color=color), line=dict(color=color, width=4.5), name=s['name']))
 
-        fig.update_layout(map_style="open-street-map", map_zoom=11, map_center={"lat": city_boundary.centroid.y, "lon": city_boundary.centroid.x}, margin={"r":0,"t":0,"l":0,"b":0}, height=700)
+        fig.update_layout(map_style="open-street-map", map_zoom=11, map_center={"lat": city_boundary.centroid.y, "lon": city_boundary.centroid.x}, margin={"r":0,"t":0,"l":0,"b":0}, height=750)
         st.plotly_chart(fig, width='stretch')
 
     except Exception as e:
         st.error(f"Error: {e}")
+else:
+    st.info("👋 Upload data files to begin tactical analysis.")

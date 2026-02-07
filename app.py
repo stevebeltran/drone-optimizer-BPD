@@ -137,11 +137,11 @@ if call_data and station_data and len(shape_components) >= 3:
 
         # --- HEALTH SCORE ---
         norm_redundancy = min(overlap_perc / 39.0, 1.0) * 100
-        health_score = (cap_perc * 0.50) + (land_perc * 0.28) + (norm_redundancy * 0.22)
+        health_score = (cap_perc * 0.50) + (land_perc * 0.25) + (norm_redundancy * 0.25)
 
         if health_score >= 85: h_color, h_label = "#28a745", "OPTIMAL"
-        elif health_score >= 70: h_color, h_label = "#94c11f", "SUFFICIENT"
-        elif health_score >= 50: h_color, h_label = "#ffc107", "MARGINAL"
+        elif health_score >= 75: h_color, h_label = "#94c11f", "SUFFICIENT"
+        elif health_score >= 55: h_color, h_label = "#ffc107", "MARGINAL"
         else: h_color, h_label = "#dc3545", "CRITICAL"
 
         # BANNER
@@ -234,5 +234,6 @@ DEPLOYED LOCATIONS:
         st.error(f"System Error: {e}")
 else:
     st.info("System Ready: Please upload deployment files above to initialize session.")
+
 
 

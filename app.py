@@ -90,7 +90,7 @@ if call_data and station_data and len(shape_components) >= 3:
         calls_in_city = gdf_calls[gdf_calls.within(city_boundary)].to_crs(epsg=epsg_code)
         calls_in_city['point_idx'] = range(len(calls_in_city))
         
-        # PRE-CALC STATION DATA
+        # PRE-CALC
         radius_m = 3218.69 
         station_metadata = []
         for i, row in df_stations_all.iterrows():
@@ -135,27 +135,24 @@ if call_data and station_data and len(shape_components) >= 3:
             inters = [active_bufs[i].intersection(active_bufs[j]) for i in range(len(active_bufs)) for j in range(i+1, len(active_bufs)) if not active_bufs[i].intersection(active_bufs[j]).is_empty]
             overlap_perc = (unary_union(inters).area / city_m.area * 100) if inters else 0.0
 
-        # --- NEW: HEALTH SCORE LOGIC ---
-        # Weights: Capacity (50%), Land (30%), Redundancy (20%)
-        # Normalizing Redundancy: We consider 25% overlap to be "perfectly redundant" for scoring
+        # --- HEALTH SCORE ---
         norm_redundancy = min(overlap_perc / 25.0, 1.0) * 100
         health_score = (cap_perc * 0.50) + (land_perc * 0.30) + (norm_redundancy * 0.20)
 
         if health_score >= 85:
-            h_color, h_label, h_desc = "#28a745", "OPTIMAL", "Excellent mission readiness. High volume coverage and strong system redundancy."
+            h_color, h_label = "#28a745", "OPTIMAL"
         elif health_score >= 70:
-            h_color, h_label, h_desc = "#94c11f", "SUFFICIENT", "Reliable coverage for primary districts. Limited redundancy in high-volume zones."
+            h_color, h_label = "#94c11f", "SUFFICIENT"
         elif health_score >= 50:
-            h_color, h_label, h_desc = "#ffc107", "MARGINAL", "Single-point failure risks. Gaps exist in geographic equity or call capacity."
+            h_color, h_label = "#ffc107", "MARGINAL"
         else:
-            h_color, h_label, h_desc = "#dc3545", "CRITICAL", "Insufficient resources. High probability of missed incidents and zero redundancy."
+            h_color, h_label = "#dc3545", "CRITICAL"
 
-        # BANNER UI
+        # COMPACT BANNER UI
         st.markdown(f"""
-            <div style="background-color: {h_color}; padding: 15px; border-radius: 10px; color: white; margin-bottom: 20px;">
-                <h2 style="margin:0; color: white;">Department Health Score: {health_score:.1f}%</h2>
-                <p style="margin:0; font-size: 1.2em; font-weight: bold;">STATUS: {h_label}</p>
-                <p style="margin:0; opacity: 0.9;">{h_desc}</p>
+            <div style="background-color: {h_color}; padding: 10px; border-radius: 5px; color: white; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+                <span style="font-size: 1.2em; font-weight: bold;">Department Health Score: {health_score:.1f}%</span>
+                <span style="font-size: 1.1em; background: rgba(0,0,0,0.2); padding: 2px 10px; border-radius: 4px;">{h_label}</span>
             </div>
             """, unsafe_allow_html=True)
 
@@ -164,6 +161,25 @@ if call_data and station_data and len(shape_components) >= 3:
         m2.metric("Land Covered", f"{land_perc:.1f}%")
         m3.metric("Redundancy", f"{overlap_perc:.1f}%")
         m4.metric("Uncovered Calls", f"{len(calls_in_city) - len(all_ids):,}")
+
+        # --- SIDEBAR SCORECARD (RESTORED) ---
+        st.sidebar.markdown("---")
+        with st.sidebar.expander("📝 Tactical Scorecard", expanded=True):
+            summary_text = f"""DRONE DEPLOYMENT ANALYSIS
+---------------------------------
+Jurisdiction: {selection}
+Strategy: {strategy}
+Drones Deployed: {len(active_names)}
+
+PERFORMANCE METRICS:
+- Health Score: {health_score:.1f}% ({h_label})
+- Call Capacity: {cap_perc:.1f}%
+- Land Coverage: {land_perc:.1f}%
+- Redundancy: {overlap_perc:.1f}%
+
+DEPLOYED LOCATIONS:
+""" + "\n".join([f"✅ {name}" for name in active_names])
+            st.text_area("Copy Report for Briefing:", summary_text, height=250)
 
         # --- THE MAP ---
         fig = go.Figure()

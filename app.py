@@ -59,7 +59,17 @@ if uploaded_files:
             st.session_state.box_open = False
             st.rerun()
 
-STATION_COLORS = ["#E6194B", "#3CB44B", "#4363D8", "#F58231", "#911EB4", "#800000", "#333333", "#000075"]
+# --- NEW BRINC BRAND COLORS (Cyan, White/Silver, Dark Gray) ---
+STATION_COLORS = [
+    "#00E5FF", # Bright Cyan (Primary Brand Color)
+    "#263238", # Deep Charcoal/Black
+    "#D4F1F4", # Tech White / Pale Cyan
+    "#00B8D4", # Medium Teal
+    "#90A4AE", # Cool Silver/Gray
+    "#00838F", # Dark Cyan
+    "#ECEFF1", # Platinum White
+    "#37474F"  # Midnight Blue gray
+]
 
 # --- 4. MAIN ANALYSIS ENGINE ---
 if call_data and station_data and len(shape_components) >= 3:
@@ -135,9 +145,9 @@ if call_data and station_data and len(shape_components) >= 3:
             inters = [active_bufs[i].intersection(active_bufs[j]) for i in range(len(active_bufs)) for j in range(i+1, len(active_bufs)) if not active_bufs[i].intersection(active_bufs[j]).is_empty]
             overlap_perc = (unary_union(inters).area / city_m.area * 100) if inters else 0.0
 
-        # --- HEALTH SCORE ---
-        norm_redundancy = min(overlap_perc / 39.0, 1.0) * 100
-        health_score = (cap_perc * 0.50) + (land_perc * 0.28) + (norm_redundancy * 0.22)
+        # --- HEALTH SCORE (Boston Standard: 35% = Perfect) ---
+        norm_redundancy = min(overlap_perc / 35.0, 1.0) * 100
+        health_score = (cap_perc * 0.50) + (land_perc * 0.30) + (norm_redundancy * 0.20)
 
         if health_score >= 85: h_color, h_label = "#28a745", "OPTIMAL"
         elif health_score >= 70: h_color, h_label = "#94c11f", "SUFFICIENT"
@@ -155,85 +165,7 @@ if call_data and station_data and len(shape_components) >= 3:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Response Capacity", f"{cap_perc:.1f}%")
         m2.metric("Land Covered", f"{land_perc:.1f}%")
-        m3.metric("Redundancy", f"{overlap_perc:.1f}%")
+        m3.metric("Redundancy (Target 35%)", f"{overlap_perc:.1f}%")
         m4.metric("Uncovered Calls", f"{len(calls_in_city) - len(all_ids):,}")
 
-        # --- SIDEBAR SCORECARD ---
-        st.sidebar.markdown("---")
-        with st.sidebar.expander("📝 Tactical Scorecard", expanded=True):
-            summary_text = f"""DRONE DEPLOYMENT ANALYSIS
----------------------------------
-Jurisdiction: {selection}
-Strategy: {strategy}
-Drones Deployed: {len(active_names)}
-
-PERFORMANCE METRICS:
-- Health Score: {health_score:.1f}% ({h_label})
-- Call Capacity: {cap_perc:.1f}%
-- Land Coverage: {land_perc:.1f}%
-- Redundancy: {overlap_perc:.1f}%
-
-DEPLOYED LOCATIONS:
-""" + "\n".join([f"✅ {name}" for name in active_names])
-            st.text_area("Copy Report for Briefing:", summary_text, height=250)
-
-        # --- THE MAP ---
-        fig = go.Figure()
-        
-        # 1. District Lines
-        for _, row in gdf_all.to_crs(epsg=4326).iterrows():
-            geom = row.geometry
-            p_list = [geom] if isinstance(geom, Polygon) else list(geom.geoms)
-            for p in p_list:
-                bx, by = p.exterior.coords.xy
-                fig.add_trace(go.Scattermap(mode="lines", lon=list(bx), lat=list(by), line=dict(color="#444", width=1), showlegend=False, hoverinfo='skip'))
-        
-        # 2. Incidents (NO HOVER)
-        sample = calls_in_city.to_crs(epsg=4326).sample(min(2000, len(calls_in_city)))
-        fig.add_trace(go.Scattermap(
-            lat=sample.geometry.y, 
-            lon=sample.geometry.x, 
-            mode='markers', 
-            marker=dict(size=4, color='#000080', opacity=0.3), 
-            name="Incidents",
-            hoverinfo='skip'
-        ))
-        
-        # 3. Stations (Split into Ring and Center Dot)
-        all_st_names = df_stations_all['name'].tolist()
-        for s in active_data:
-            color = STATION_COLORS[all_st_names.index(s['name']) % len(STATION_COLORS)]
-            angles = np.linspace(0, 2*np.pi, 60)
-            clats = s['lat'] + (2/69.172) * np.sin(angles)
-            clons = s['lon'] + (2/(69.172 * np.cos(np.radians(s['lat'])))) * np.cos(angles)
-            
-            # A) The Ring (No Hover, No Legend Entry)
-            fig.add_trace(go.Scattermap(
-                lat=list(clats) + [clats[0]], # Close the loop
-                lon=list(clons) + [clons[0]], 
-                mode='lines', 
-                line=dict(color=color, width=4.5), 
-                hoverinfo='skip',
-                showlegend=False
-            ))
-            
-            # B) The Center Dot (Hover Name Enabled, Big Size)
-            fig.add_trace(go.Scattermap(
-                lat=[s['lat']], 
-                lon=[s['lon']], 
-                mode='markers', 
-                marker=dict(size=12, color=color), # Increased Size
-                name=s['name'],
-                hoverinfo='name'
-            ))
-
-        fig.update_layout(map_style="open-street-map", map_zoom=11, map_center={"lat": city_boundary.centroid.y, "lon": city_boundary.centroid.x}, margin={"r":0,"t":0,"l":0,"b":0}, height=750)
-        st.plotly_chart(fig, width='stretch')
-
-    except Exception as e:
-        st.error(f"System Error: {e}")
-else:
-    st.info("System Ready: Please upload deployment files above to initialize session.")
-
-
-
+        # --- SIDEBAR SCORECARD

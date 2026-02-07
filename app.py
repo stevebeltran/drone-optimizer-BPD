@@ -222,7 +222,7 @@ DEPLOYED LOCATIONS:
                 lat=[s['lat']], 
                 lon=[s['lon']], 
                 mode='markers', 
-                marker=dict(size=25, color=color), # Increased Size
+                marker=dict(size=12, color=color), # Increased Size
                 name=s['name'],
                 hoverinfo='name'
             ))
@@ -234,3 +234,4 @@ DEPLOYED LOCATIONS:
         st.error(f"System Error: {e}")
 else:
     st.info("System Ready: Please upload deployment files above to initialize session.")
+

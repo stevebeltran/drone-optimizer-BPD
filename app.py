@@ -40,7 +40,7 @@ def process_geo_data(shp_path, selection):
         boundary = active_gdf.iloc[0].geometry
     return gdf, active_gdf, boundary, name_col
 
-# --- 3. DATA IMPORT & AUTO-CLOSE LOGIC ---
+# --- 3. DATA IMPORT ---
 call_data, station_data, shape_components = None, None, []
 
 with st.expander("📁 Secure Data Import", expanded=st.session_state.box_open):
@@ -54,7 +54,6 @@ if uploaded_files:
         elif any(fname.endswith(ext) for ext in ['.shp', '.shx', '.dbf', '.prj']):
             shape_components.append(f)
 
-    # Trigger Auto-Close
     if call_data and station_data and len(shape_components) >= 4:
         if st.session_state.box_open:
             st.session_state.box_open = False
@@ -91,7 +90,7 @@ if call_data and station_data and len(shape_components) >= 3:
         calls_in_city = gdf_calls[gdf_calls.within(city_boundary)].to_crs(epsg=epsg_code)
         calls_in_city['point_idx'] = range(len(calls_in_city))
         
-        # --- PRE-CALC STATION DATA ---
+        # PRE-CALC STATION DATA
         radius_m = 3218.69 
         station_metadata = []
         for i, row in df_stations_all.iterrows():
@@ -99,12 +98,9 @@ if call_data and station_data and len(shape_components) >= 3:
             mask = calls_in_city.geometry.distance(s_pt_m) <= radius_m
             indices = set(calls_in_city[mask]['point_idx'])
             clipped_buf = s_pt_m.buffer(radius_m).intersection(city_m)
-            station_metadata.append({
-                'name': row['name'], 'lat': row['lat'], 'lon': row['lon'],
-                'clipped_m': clipped_buf, 'indices': indices
-            })
+            station_metadata.append({'name': row['name'], 'lat': row['lat'], 'lon': row['lon'], 'clipped_m': clipped_buf, 'indices': indices})
 
-        # --- 5. OPTIMIZER ---
+        # OPTIMIZER
         st.sidebar.header("🎯 Optimizer Controls")
         k = st.sidebar.slider("Drones to Deploy", 1, len(station_metadata), min(2, len(station_metadata)))
         strategy = st.sidebar.radio("Optimization Goal", ("Maximize Call Volume", "Maximize Land Equity"))
@@ -125,12 +121,11 @@ if call_data and station_data and len(shape_components) >= 3:
         default_sel = [station_metadata[i]['name'] for i in (best_call_combo if strategy == "Maximize Call Volume" else (best_geo_combo if best_geo_combo != -1 else best_call_combo))]
         active_names = ctrl_col2.multiselect("📡 Current Drone List", options=df_stations_all['name'].tolist(), default=default_sel)
 
-        # --- 6. METRICS ---
+        # --- METRICS CALCULATION ---
         active_data = [s for s in station_metadata if s['name'] in active_names]
         active_indices = [s['indices'] for s in active_data]
         all_ids = set().union(*active_indices) if active_indices else set()
         cap_perc = (len(all_ids) / len(calls_in_city)) * 100 if len(calls_in_city) > 0 else 0
-        uncovered = len(calls_in_city) - len(all_ids)
         total_union_geo = unary_union([s['clipped_m'] for s in active_data]) if active_data else None
         land_perc = (total_union_geo.area / city_m.area * 100) if total_union_geo else 0
         
@@ -140,35 +135,38 @@ if call_data and station_data and len(shape_components) >= 3:
             inters = [active_bufs[i].intersection(active_bufs[j]) for i in range(len(active_bufs)) for j in range(i+1, len(active_bufs)) if not active_bufs[i].intersection(active_bufs[j]).is_empty]
             overlap_perc = (unary_union(inters).area / city_m.area * 100) if inters else 0.0
 
-        st.markdown("---")
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Total Incident Points", f"{len(calls_in_city):,}")
-        m2.metric("Response Capacity", f"{cap_perc:.1f}%")
-        m3.metric("Land Covered", f"{land_perc:.1f}%")
-        m4.metric("Redundancy", f"{overlap_perc:.1f}%")
-        m5.metric("Uncovered", f"{uncovered:,}")
+        # --- NEW: HEALTH SCORE LOGIC ---
+        # Weights: Capacity (50%), Land (30%), Redundancy (20%)
+        # Normalizing Redundancy: We consider 25% overlap to be "perfectly redundant" for scoring
+        norm_redundancy = min(overlap_perc / 25.0, 1.0) * 100
+        health_score = (cap_perc * 0.50) + (land_perc * 0.30) + (norm_redundancy * 0.20)
 
-        # Summary / Scorecard
-        with st.sidebar.expander("📝 Tactical Scorecard", expanded=True):
-            summary_text = f"""DRONE DEPLOYMENT ANALYSIS
----------------------------------
-Jurisdiction: {selection}
-Strategy: {strategy}
-Drones Deployed: {len(active_names)}
+        if health_score >= 85:
+            h_color, h_label, h_desc = "#28a745", "OPTIMAL", "Excellent mission readiness. High volume coverage and strong system redundancy."
+        elif health_score >= 70:
+            h_color, h_label, h_desc = "#94c11f", "SUFFICIENT", "Reliable coverage for primary districts. Limited redundancy in high-volume zones."
+        elif health_score >= 50:
+            h_color, h_label, h_desc = "#ffc107", "MARGINAL", "Single-point failure risks. Gaps exist in geographic equity or call capacity."
+        else:
+            h_color, h_label, h_desc = "#dc3545", "CRITICAL", "Insufficient resources. High probability of missed incidents and zero redundancy."
 
-PERFORMANCE METRICS:
-- Call Capacity: {cap_perc:.1f}%
-- Total Calls Covered: {len(all_ids):,}
-- Land Coverage: {land_perc:.1f}%
-- System Redundancy: {overlap_perc:.1f}%
+        # BANNER UI
+        st.markdown(f"""
+            <div style="background-color: {h_color}; padding: 15px; border-radius: 10px; color: white; margin-bottom: 20px;">
+                <h2 style="margin:0; color: white;">Department Health Score: {health_score:.1f}%</h2>
+                <p style="margin:0; font-size: 1.2em; font-weight: bold;">STATUS: {h_label}</p>
+                <p style="margin:0; opacity: 0.9;">{h_desc}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-DEPLOYED LOCATIONS:
-""" + "\n".join([f"✅ {name}" for name in active_names])
-            st.text_area("Copy Report for Briefing:", summary_text, height=250)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Response Capacity", f"{cap_perc:.1f}%")
+        m2.metric("Land Covered", f"{land_perc:.1f}%")
+        m3.metric("Redundancy", f"{overlap_perc:.1f}%")
+        m4.metric("Uncovered Calls", f"{len(calls_in_city) - len(all_ids):,}")
 
-        # --- 7. THE MAP ---
+        # --- THE MAP ---
         fig = go.Figure()
-        # [Map rendering logic: Districts, Incidents, Station Rings]
         for _, row in gdf_all.to_crs(epsg=4326).iterrows():
             geom = row.geometry
             p_list = [geom] if isinstance(geom, Polygon) else list(geom.geoms)

@@ -54,7 +54,7 @@ if uploaded_files:
         elif any(fname.endswith(ext) for ext in ['.shp', '.shx', '.dbf', '.prj']):
             shape_components.append(f)
 
-    # Trigger Auto-Close: Check for 2 CSVs and 4 Shapefile parts
+    # Trigger Auto-Close
     if call_data and station_data and len(shape_components) >= 4:
         if st.session_state.box_open:
             st.session_state.box_open = False
@@ -148,22 +148,27 @@ if call_data and station_data and len(shape_components) >= 3:
         m4.metric("Redundancy", f"{overlap_perc:.1f}%")
         m5.metric("Uncovered", f"{uncovered:,}")
 
-        # Summary
-        with st.sidebar.expander("📝 Tactical Summary"):
-            summary_text = f"""DRONE DEPLOYMENT SUMMARY
+        # Summary / Scorecard
+        with st.sidebar.expander("📝 Tactical Scorecard", expanded=True):
+            summary_text = f"""DRONE DEPLOYMENT ANALYSIS
+---------------------------------
 Jurisdiction: {selection}
+Strategy: {strategy}
 Drones Deployed: {len(active_names)}
-Capacity: {cap_perc:.1f}%
-Land Coverage: {land_perc:.1f}%
-Uncovered Incidents: {uncovered:,}
+
+PERFORMANCE METRICS:
+- Call Capacity: {cap_perc:.1f}%
+- Total Calls Covered: {len(all_ids):,}
+- Land Coverage: {land_perc:.1f}%
+- System Redundancy: {overlap_perc:.1f}%
 
 DEPLOYED LOCATIONS:
-""" + "\n".join([f"- {name}" for name in active_names])
-            st.text_area("Copy/Paste this report:", summary_text, height=200)
+""" + "\n".join([f"✅ {name}" for name in active_names])
+            st.text_area("Copy Report for Briefing:", summary_text, height=250)
 
         # --- 7. THE MAP ---
         fig = go.Figure()
-        # Draw Districts
+        # [Map rendering logic: Districts, Incidents, Station Rings]
         for _, row in gdf_all.to_crs(epsg=4326).iterrows():
             geom = row.geometry
             p_list = [geom] if isinstance(geom, Polygon) else list(geom.geoms)
@@ -171,11 +176,9 @@ DEPLOYED LOCATIONS:
                 bx, by = p.exterior.coords.xy
                 fig.add_trace(go.Scattermap(mode="lines", lon=list(bx), lat=list(by), line=dict(color="#444", width=1), showlegend=False, hoverinfo='skip'))
         
-        # Sample Calls
         sample = calls_in_city.to_crs(epsg=4326).sample(min(2000, len(calls_in_city)))
         fig.add_trace(go.Scattermap(lat=sample.geometry.y, lon=sample.geometry.x, mode='markers', marker=dict(size=4, color='#000080', opacity=0.3), name="Incidents"))
         
-        # Station Rings
         all_st_names = df_stations_all['name'].tolist()
         for s in active_data:
             color = STATION_COLORS[all_st_names.index(s['name']) % len(STATION_COLORS)]

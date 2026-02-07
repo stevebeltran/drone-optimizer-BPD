@@ -144,7 +144,7 @@ if call_data and station_data and len(shape_components) >= 3:
         elif health_score >= 50: h_color, h_label = "#ffc107", "MARGINAL"
         else: h_color, h_label = "#dc3545", "CRITICAL"
 
-        # COMPACT BANNER
+        # BANNER
         st.markdown(f"""
             <div style="background-color: {h_color}; padding: 10px; border-radius: 5px; color: white; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
                 <span style="font-size: 1.2em; font-weight: bold;">Department Health Score: {health_score:.1f}%</span>
@@ -179,7 +179,8 @@ DEPLOYED LOCATIONS:
 
         # --- THE MAP ---
         fig = go.Figure()
-        # Districts
+        
+        # 1. District Lines
         for _, row in gdf_all.to_crs(epsg=4326).iterrows():
             geom = row.geometry
             p_list = [geom] if isinstance(geom, Polygon) else list(geom.geoms)
@@ -187,7 +188,7 @@ DEPLOYED LOCATIONS:
                 bx, by = p.exterior.coords.xy
                 fig.add_trace(go.Scattermap(mode="lines", lon=list(bx), lat=list(by), line=dict(color="#444", width=1), showlegend=False, hoverinfo='skip'))
         
-        # Incidents (NO HOVER INFO)
+        # 2. Incidents (NO HOVER)
         sample = calls_in_city.to_crs(epsg=4326).sample(min(2000, len(calls_in_city)))
         fig.add_trace(go.Scattermap(
             lat=sample.geometry.y, 
@@ -195,17 +196,36 @@ DEPLOYED LOCATIONS:
             mode='markers', 
             marker=dict(size=4, color='#000080', opacity=0.3), 
             name="Incidents",
-            hoverinfo='skip'  # <--- DISABLED HOVER LABELS HERE
+            hoverinfo='skip'
         ))
         
-        # Stations
+        # 3. Stations (Split into Ring and Center Dot)
         all_st_names = df_stations_all['name'].tolist()
         for s in active_data:
             color = STATION_COLORS[all_st_names.index(s['name']) % len(STATION_COLORS)]
             angles = np.linspace(0, 2*np.pi, 60)
             clats = s['lat'] + (2/69.172) * np.sin(angles)
             clons = s['lon'] + (2/(69.172 * np.cos(np.radians(s['lat'])))) * np.cos(angles)
-            fig.add_trace(go.Scattermap(lat=list(clats) + [None, s['lat']], lon=list(clons) + [None, s['lon']], mode='lines+markers', marker=dict(size=[0]*60 + [18], color=color), line=dict(color=color, width=4.5), name=s['name']))
+            
+            # A) The Ring (No Hover, No Legend Entry)
+            fig.add_trace(go.Scattermap(
+                lat=list(clats) + [clats[0]], # Close the loop
+                lon=list(clons) + [clons[0]], 
+                mode='lines', 
+                line=dict(color=color, width=4.5), 
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            
+            # B) The Center Dot (Hover Name Enabled, Big Size)
+            fig.add_trace(go.Scattermap(
+                lat=[s['lat']], 
+                lon=[s['lon']], 
+                mode='markers', 
+                marker=dict(size=25, color=color), # Increased Size
+                name=s['name'],
+                hoverinfo='name'
+            ))
 
         fig.update_layout(map_style="open-street-map", map_zoom=11, map_center={"lat": city_boundary.centroid.y, "lon": city_boundary.centroid.x}, margin={"r":0,"t":0,"l":0,"b":0}, height=750)
         st.plotly_chart(fig, width='stretch')

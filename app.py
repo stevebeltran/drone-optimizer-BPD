@@ -10,25 +10,19 @@ import shutil
 import itertools
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="BPD Drone Logistics Portal", layout="wide", page_icon="🚓")
+st.set_page_config(page_title="Drone Logistics Portal", layout="wide", page_icon="🛰️")
 
 # --- 1. INITIALIZE SESSION STATE ---
 if 'box_open' not in st.session_state:
     st.session_state.box_open = True
 
-# --- 2. BRANDING & HEADER ---
-BPD_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Boston_Police_Department_Patch.svg/1200px-Boston_Police_Department_Patch.svg.png"
-
-st.sidebar.image(BPD_LOGO_URL, width=150)
-st.sidebar.markdown("### **BPD Tactical Analysis**")
-st.sidebar.caption("Unclassified // For Official Use Only")
-
+# --- 2. HEADER ---
 if st.sidebar.button("🔄 Reset & Upload New Data"):
     st.session_state.box_open = True
     st.rerun()
 
 st.title("🛰️ Strategic Drone Deployment Optimizer")
-st.markdown("#### **Boston Police Department // Operations Research Division**")
+st.markdown("#### **Geospatial Operations Analysis Tool**")
 
 # --- SPEED OPTIMIZATION: CACHING ---
 @st.cache_data
@@ -111,7 +105,7 @@ if call_data and station_data and len(shape_components) >= 3:
             })
 
         # --- 5. OPTIMIZER ---
-        st.sidebar.markdown("---")
+        st.sidebar.header("🎯 Optimizer Controls")
         k = st.sidebar.slider("Drones to Deploy", 1, len(station_metadata), min(2, len(station_metadata)))
         strategy = st.sidebar.radio("Optimization Goal", ("Maximize Call Volume", "Maximize Land Equity"))
 
@@ -154,9 +148,9 @@ if call_data and station_data and len(shape_components) >= 3:
         m4.metric("Redundancy", f"{overlap_perc:.1f}%")
         m5.metric("Uncovered", f"{uncovered:,}")
 
-        # Tactical Summary
+        # Summary
         with st.sidebar.expander("📝 Tactical Summary"):
-            summary_text = f"""BPD DRONE DEPLOYMENT SUMMARY
+            summary_text = f"""DRONE DEPLOYMENT SUMMARY
 Jurisdiction: {selection}
 Drones Deployed: {len(active_names)}
 Capacity: {cap_perc:.1f}%
@@ -194,6 +188,6 @@ DEPLOYED LOCATIONS:
         st.plotly_chart(fig, width='stretch')
 
     except Exception as e:
-        st.error(f"Operational Error: {e}")
+        st.error(f"System Error: {e}")
 else:
-    st.info("🚓 BPD Tactical Interface: Please upload deployment files above to initialize session.")
+    st.info("System Ready: Please upload deployment files above to initialize session.")

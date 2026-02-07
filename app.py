@@ -42,7 +42,7 @@ def process_geo_data(shp_path, selection):
 call_data, station_data, shape_components = None, None, []
 
 # CHANGED: expanded=True so it starts open
-with st.expander("📁 Secure Data Import", expanded=True):
+with st.expander("📁 Data Import", expanded=True):
     uploaded_files = st.file_uploader("Upload Incident CSVs and Shapefiles (6 files total)", accept_multiple_files=True)
 
 STATION_COLORS = ["#E6194B", "#3CB44B", "#4363D8", "#F58231", "#911EB4", "#800000", "#333333", "#000075"]
@@ -180,3 +180,4 @@ DEPLOYED LOCATIONS:
         st.error(f"Operational Error: {e}")
 else:
     st.info("🚓 BPD Tactical Interface: Please upload deployment files above to initialize session.")
+

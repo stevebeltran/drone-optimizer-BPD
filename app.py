@@ -41,20 +41,22 @@ def process_geo_data(shp_path, selection):
     return gdf, active_gdf, boundary, name_col
 
 # --- 3. DATA IMPORT ---
-call_data, station_data, shape_components = None, None, []
+call_data, station_data, shot_data, shape_components = None, None, None, []
 
 with st.expander("📁 Secure Data Import", expanded=st.session_state.box_open):
-    uploaded_files = st.file_uploader("Upload Incident CSVs and Shapefiles (6 files total)", accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Upload Incident CSVs, 'shots.csv', and Shapefiles", accept_multiple_files=True)
 
 if uploaded_files:
     for f in uploaded_files:
         fname = f.name.lower()
         if fname == "calls.csv": call_data = f
         elif fname == "stations.csv": station_data = f
+        elif fname == "shots.csv": shot_data = f  # <--- NEW: Handle shots.csv
         elif any(fname.endswith(ext) for ext in ['.shp', '.shx', '.dbf', '.prj']):
             shape_components.append(f)
 
-    if call_data and station_data and len(shape_components) >= 4:
+    # Check for minimum requirements (Calls + Stations + Shapefile parts)
+    if call_data and station_data and len(shape_components) >= 3:
         if st.session_state.box_open:
             st.session_state.box_open = False
             st.rerun()
@@ -120,6 +122,28 @@ if call_data and station_data and len(shape_components) >= 3:
             
         default_sel = [station_metadata[i]['name'] for i in (best_call_combo if strategy == "Maximize Call Volume" else (best_geo_combo if best_geo_combo != -1 else best_call_combo))]
         active_names = ctrl_col2.multiselect("📡 Current Drone List", options=df_stations_all['name'].tolist(), default=default_sel)
+        
+        # --- NEW: SHOT DETECTION TOGGLE ---
+        st.sidebar.markdown("---")
+        st.sidebar.header("🔍 Layer Controls")
+        
+        show_shots = False
+        df_shots = None
+        
+        if shot_data:
+            show_shots = st.sidebar.toggle("Show Shot Detection Events", value=False)
+            if show_shots:
+                try:
+                    df_shots = pd.read_csv(shot_data)
+                    # Simple validation to ensure we have the right columns
+                    if not {'lat', 'lon'}.issubset(df_shots.columns):
+                        st.sidebar.error("shots.csv missing 'lat' or 'lon' columns")
+                        df_shots = None
+                except Exception as e:
+                    st.sidebar.error(f"Error reading shots.csv: {e}")
+        else:
+             st.sidebar.info("Upload 'shots.csv' to enable Shot Detection layer")
+
 
         # --- METRICS ---
         active_data = [s for s in station_metadata if s['name'] in active_names]
@@ -198,6 +222,20 @@ DEPLOYED LOCATIONS:
             name="Incidents",
             hoverinfo='skip'
         ))
+
+        # --- NEW: SHOT DETECTION LAYER ---
+        if show_shots and df_shots is not None:
+             # Filter shots to only those inside the view/jurisdiction (optional, but cleaner)
+             # For speed, we just plot all or you could implement the 'within(city_boundary)' logic like calls
+             fig.add_trace(go.Scattermap(
+                lat=df_shots['lat'],
+                lon=df_shots['lon'],
+                mode='markers',
+                marker=dict(symbol='triangle', size=10, color='#FF4500', opacity=0.9), # Red Triangles
+                name="Shot Detection",
+                text=df_shots['point_id'] if 'point_id' in df_shots.columns else None,
+                hoverinfo='text+lat+lon'
+            ))
         
         # 3. Stations (Split into Ring and Center Dot)
         all_st_names = df_stations_all['name'].tolist()
@@ -234,6 +272,3 @@ DEPLOYED LOCATIONS:
         st.error(f"System Error: {e}")
 else:
     st.info("System Ready: Please upload deployment files above to initialize session.")
-
-
-

@@ -105,7 +105,7 @@ if call_data and station_data and len(shape_components) >= 3:
         # OPTIMIZER
         st.sidebar.header("🎯 Optimizer Controls")
         
-        # MODIFICATION: Slider starts at 0 for "Full Generation Mode"
+        # Slider starts at 0 for "Full Generation Mode"
         k = st.sidebar.slider("Existing Drones to Deploy (Set 0 to Generate All)", 0, len(station_metadata), min(2, len(station_metadata)))
         strategy = st.sidebar.radio("Optimization Goal", ("Maximize Call Volume", "Maximize Land Equity"))
 
@@ -279,29 +279,29 @@ DEPLOYED ASSETS:
                 hoverinfo='text+lat+lon'
             ))
 
-        # 4. SUGGESTED SITES (Dotted Circles)
+        # 4. SUGGESTED SITES (HOT PINK RINGS)
         for i, c in enumerate(suggested_coords):
-            # Calculate ring - INCREASED POINTS FOR BETTER VISIBILITY
-            angles = np.linspace(0, 2*np.pi, 100) # Increased to 100 points
+            # Calculate ring
+            angles = np.linspace(0, 2*np.pi, 100)
             clats = c['lat'] + (2/69.172) * np.sin(angles)
             clons = c['lon'] + (2/(69.172 * np.cos(np.radians(c['lat'])))) * np.cos(angles)
             
-            # A) Dotted Ring (Simulated with Markers)
+            # A) Dotted Ring (Simulated with Markers) -> HOT PINK
             fig.add_trace(go.Scattermap(
                 lat=list(clats),
                 lon=list(clons),
                 mode='markers',
-                marker=dict(size=4, color='#00FFFF'), # Cyan Dots
+                marker=dict(size=4, color='#FF00FF'), # Hot Pink
                 name=f"Proposed Coverage {i+1}",
                 hoverinfo='skip',
                 showlegend=False
             ))
-            # B) Center Target
+            # B) Center Target -> HOT PINK
             fig.add_trace(go.Scattermap(
                 lat=[c['lat']],
                 lon=[c['lon']],
                 mode='markers+text',
-                marker=dict(size=12, color='#00FFFF', symbol='circle'), 
+                marker=dict(size=12, color='#FF00FF', symbol='circle'), # Hot Pink
                 text=[f"NEW SITE {i+1}"],
                 textposition="top center",
                 name=f"Suggestion {i+1}",

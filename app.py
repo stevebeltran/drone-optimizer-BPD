@@ -111,7 +111,7 @@ if call_data and station_data and len(shape_components) >= 3:
 
         if k == 0:
             active_names = []
-            st.sidebar.info("🧪 **Generation Mode Active**: Calculating optimal sites for 100% coverage...")
+            st.sidebar.info("🧪 **Generation Mode**: Enable 'Suggested Sites' below to view results.")
         else:
             combos = list(itertools.combinations(range(len(station_metadata)), k))
             if len(combos) > 500: combos = combos[:500] 
@@ -129,9 +129,11 @@ if call_data and station_data and len(shape_components) >= 3:
             default_sel = [station_metadata[i]['name'] for i in (best_call_combo if strategy == "Maximize Call Volume" else (best_geo_combo if best_geo_combo != -1 else best_call_combo))]
             active_names = ctrl_col2.multiselect("📡 Current Drone List", options=df_stations_all['name'].tolist(), default=default_sel)
         
-        # --- SHOT LAYER CONTROL ---
+        # --- LAYER CONTROLS (Updated) ---
         st.sidebar.markdown("---")
         st.sidebar.header("🔍 Layer Controls")
+        
+        # 1. Shot Detection Toggle
         show_shots = False
         df_shots = None
         if shot_data:
@@ -139,6 +141,9 @@ if call_data and station_data and len(shape_components) >= 3:
             if show_shots:
                 try: df_shots = pd.read_csv(shot_data)
                 except: pass
+        
+        # 2. Suggested Sites Toggle (NEW)
+        show_suggestions = st.sidebar.toggle("Show Suggested Coverage Sites", value=False)
 
         # --- METRICS ---
         active_data = [s for s in station_metadata if s['name'] in active_names]
@@ -159,38 +164,25 @@ if call_data and station_data and len(shape_components) >= 3:
         
         # Run generator if coverage is not complete
         if land_perc < 99.0:
-            
-            # Start with what we have (or empty if k=0)
             current_covered = total_union_geo if total_union_geo else Polygon()
-            
-            # Create a working copy of the city area to "whittle down"
             uncovered_poly = city_m.difference(current_covered)
-            
-            # Iterative Solver
-            max_iterations = 25 # Safety limit to prevent infinite loops
+            max_iterations = 25 
             
             for _ in range(max_iterations):
                 if uncovered_poly.is_empty or (uncovered_poly.area / city_m.area) < 0.01:
-                    break # Stop if <1% remains uncovered
+                    break 
                 
-                # Find the largest chunk of uncovered land
                 if isinstance(uncovered_poly, MultiPolygon):
-                    # Filter out tiny slivers
                     valid_geoms = [g for g in uncovered_poly.geoms if g.area > 1000] 
                     if not valid_geoms: break
                     target_chunk = max(valid_geoms, key=lambda g: g.area)
                 else:
                     target_chunk = uncovered_poly
                 
-                # Place a drone at a representative point inside that chunk
                 new_site_pt = target_chunk.representative_point()
-                
-                # Add to suggestions
-                # Transform back to Lat/Lon for storage
                 p_geo = gpd.GeoSeries([new_site_pt], crs=epsg_code).to_crs(epsg=4326).iloc[0]
                 suggested_coords.append({'lat': p_geo.y, 'lon': p_geo.x})
                 
-                # Update the 'Covered' area for the next iteration
                 new_coverage = new_site_pt.buffer(radius_m)
                 uncovered_poly = uncovered_poly.difference(new_coverage)
 
@@ -230,16 +222,16 @@ Status: {h_label}
 DEPLOYED ASSETS:
 """ + "\n".join([f"✅ {name}" for name in active_names])
             
-            # Append suggestions if any
-            if suggested_coords:
+            # Append suggestions only if visible
+            if suggested_coords and show_suggestions:
                 summary_text += "\n\n⚠️ SUGGESTED EXPANSIONS:\n"
                 for i, c in enumerate(suggested_coords):
                     summary_text += f"📍 Site {i+1}: {c['lat']:.5f}, {c['lon']:.5f}\n"
 
             st.text_area("Copy Report:", summary_text, height=300)
 
-        # Show clickable suggestions list
-        if suggested_coords:
+        # Show clickable suggestions list (Controlled by Toggle)
+        if suggested_coords and show_suggestions:
             st.sidebar.markdown("### 💡 Recommended Sites")
             st.sidebar.info(f"Generated {len(suggested_coords)} sites for coverage.")
             for i, c in enumerate(suggested_coords):
@@ -279,34 +271,35 @@ DEPLOYED ASSETS:
                 hoverinfo='text+lat+lon'
             ))
 
-        # 4. SUGGESTED SITES (HOT PINK RINGS)
-        for i, c in enumerate(suggested_coords):
-            # Calculate ring
-            angles = np.linspace(0, 2*np.pi, 100)
-            clats = c['lat'] + (2/69.172) * np.sin(angles)
-            clons = c['lon'] + (2/(69.172 * np.cos(np.radians(c['lat'])))) * np.cos(angles)
-            
-            # A) Dotted Ring (Simulated with Markers) -> HOT PINK
-            fig.add_trace(go.Scattermap(
-                lat=list(clats),
-                lon=list(clons),
-                mode='markers',
-                marker=dict(size=4, color='#FF00FF'), # Hot Pink
-                name=f"Proposed Coverage {i+1}",
-                hoverinfo='skip',
-                showlegend=False
-            ))
-            # B) Center Target -> HOT PINK
-            fig.add_trace(go.Scattermap(
-                lat=[c['lat']],
-                lon=[c['lon']],
-                mode='markers+text',
-                marker=dict(size=12, color='#FF00FF', symbol='circle'), # Hot Pink
-                text=[f"NEW SITE {i+1}"],
-                textposition="top center",
-                name=f"Suggestion {i+1}",
-                hoverinfo='text'
-            ))
+        # 4. SUGGESTED SITES (Controlled by Toggle)
+        if show_suggestions:
+            for i, c in enumerate(suggested_coords):
+                # Calculate ring
+                angles = np.linspace(0, 2*np.pi, 100)
+                clats = c['lat'] + (2/69.172) * np.sin(angles)
+                clons = c['lon'] + (2/(69.172 * np.cos(np.radians(c['lat'])))) * np.cos(angles)
+                
+                # A) Dotted Ring -> HOT PINK
+                fig.add_trace(go.Scattermap(
+                    lat=list(clats),
+                    lon=list(clons),
+                    mode='markers',
+                    marker=dict(size=4, color='#FF00FF'), 
+                    name=f"Proposed Coverage {i+1}",
+                    hoverinfo='skip',
+                    showlegend=False
+                ))
+                # B) Center Target -> HOT PINK
+                fig.add_trace(go.Scattermap(
+                    lat=[c['lat']],
+                    lon=[c['lon']],
+                    mode='markers+text',
+                    marker=dict(size=12, color='#FF00FF', symbol='circle'), 
+                    text=[f"NEW SITE {i+1}"],
+                    textposition="top center",
+                    name=f"Suggestion {i+1}",
+                    hoverinfo='text'
+                ))
         
         # 5. Active Stations
         all_st_names = df_stations_all['name'].tolist()

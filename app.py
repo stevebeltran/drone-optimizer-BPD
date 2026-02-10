@@ -51,11 +51,10 @@ if uploaded_files:
         fname = f.name.lower()
         if fname == "calls.csv": call_data = f
         elif fname == "stations.csv": station_data = f
-        elif fname == "shots.csv": shot_data = f  # <--- NEW: Handle shots.csv
+        elif fname == "shots.csv": shot_data = f
         elif any(fname.endswith(ext) for ext in ['.shp', '.shx', '.dbf', '.prj']):
             shape_components.append(f)
 
-    # Check for minimum requirements (Calls + Stations + Shapefile parts)
     if call_data and station_data and len(shape_components) >= 3:
         if st.session_state.box_open:
             st.session_state.box_open = False
@@ -123,27 +122,17 @@ if call_data and station_data and len(shape_components) >= 3:
         default_sel = [station_metadata[i]['name'] for i in (best_call_combo if strategy == "Maximize Call Volume" else (best_geo_combo if best_geo_combo != -1 else best_call_combo))]
         active_names = ctrl_col2.multiselect("📡 Current Drone List", options=df_stations_all['name'].tolist(), default=default_sel)
         
-        # --- NEW: SHOT DETECTION TOGGLE ---
+        # --- SHOT LAYER CONTROL ---
         st.sidebar.markdown("---")
         st.sidebar.header("🔍 Layer Controls")
-        
         show_shots = False
         df_shots = None
-        
         if shot_data:
             show_shots = st.sidebar.toggle("Show Shot Detection Events", value=False)
             if show_shots:
                 try:
                     df_shots = pd.read_csv(shot_data)
-                    # Simple validation to ensure we have the right columns
-                    if not {'lat', 'lon'}.issubset(df_shots.columns):
-                        st.sidebar.error("shots.csv missing 'lat' or 'lon' columns")
-                        df_shots = None
-                except Exception as e:
-                    st.sidebar.error(f"Error reading shots.csv: {e}")
-        else:
-             st.sidebar.info("Upload 'shots.csv' to enable Shot Detection layer")
-
+                except: pass
 
         # --- METRICS ---
         active_data = [s for s in station_metadata if s['name'] in active_names]
@@ -158,6 +147,32 @@ if call_data and station_data and len(shape_components) >= 3:
             active_bufs = [s['clipped_m'] for s in active_data]
             inters = [active_bufs[i].intersection(active_bufs[j]) for i in range(len(active_bufs)) for j in range(i+1, len(active_bufs)) if not active_bufs[i].intersection(active_bufs[j]).is_empty]
             overlap_perc = (unary_union(inters).area / city_m.area * 100) if inters else 0.0
+
+        # --- NEW: GAP ANALYSIS & SUGGESTIONS ---
+        suggested_coords = []
+        if land_perc < 99.9:
+            # 1. Calculate Uncovered Areas
+            covered_poly = total_union_geo if total_union_geo else Polygon()
+            uncovered_poly = city_m.difference(covered_poly)
+            
+            if not uncovered_poly.is_empty:
+                # 2. Extract significant gaps
+                gaps = [uncovered_poly] if isinstance(uncovered_poly, Polygon) else list(uncovered_poly.geoms)
+                # Sort by area to prioritize big holes
+                gaps = sorted(gaps, key=lambda x: x.area, reverse=True)
+                
+                # 3. Generate centroids for top gaps
+                sug_points_m = []
+                for gap in gaps:
+                    if gap.area < 500000: continue # Ignore gaps smaller than ~0.5 sq km
+                    if len(sug_points_m) >= 5: break # Cap suggestions
+                    sug_points_m.append(gap.representative_point())
+                
+                # 4. Convert back to Lat/Lon
+                if sug_points_m:
+                    gs_sug = gpd.GeoSeries(sug_points_m, crs=epsg_code).to_crs(epsg=4326)
+                    for p in gs_sug:
+                        suggested_coords.append({'lat': p.y, 'lon': p.x})
 
         # --- HEALTH SCORE ---
         norm_redundancy = min(overlap_perc / 39.0, 1.0) * 100
@@ -182,24 +197,32 @@ if call_data and station_data and len(shape_components) >= 3:
         m3.metric("Redundancy", f"{overlap_perc:.1f}%")
         m4.metric("Uncovered Calls", f"{len(calls_in_city) - len(all_ids):,}")
 
-        # --- SIDEBAR SCORECARD ---
+        # --- SIDEBAR SCORECARD & SUGGESTIONS ---
         st.sidebar.markdown("---")
         with st.sidebar.expander("📝 Tactical Scorecard", expanded=True):
             summary_text = f"""DRONE DEPLOYMENT ANALYSIS
 ---------------------------------
 Jurisdiction: {selection}
-Strategy: {strategy}
-Drones Deployed: {len(active_names)}
+Coverage: {land_perc:.1f}%
+Status: {h_label}
 
-PERFORMANCE METRICS:
-- Health Score: {health_score:.1f}% ({h_label})
-- Call Capacity: {cap_perc:.1f}%
-- Land Coverage: {land_perc:.1f}%
-- Redundancy: {overlap_perc:.1f}%
-
-DEPLOYED LOCATIONS:
+DEPLOYED ASSETS:
 """ + "\n".join([f"✅ {name}" for name in active_names])
-            st.text_area("Copy Report for Briefing:", summary_text, height=250)
+            
+            # Append suggestions if any
+            if suggested_coords:
+                summary_text += "\n\n⚠️ SUGGESTED EXPANSIONS:\n"
+                for i, c in enumerate(suggested_coords):
+                    summary_text += f"📍 Site {i+1}: {c['lat']:.5f}, {c['lon']:.5f}\n"
+
+            st.text_area("Copy Report:", summary_text, height=300)
+
+        # Show clickable suggestions list
+        if suggested_coords:
+            st.sidebar.markdown("### 💡 Recommended Sites")
+            st.sidebar.info("Coverage < 100%. Suggested new launch sites:")
+            for i, c in enumerate(suggested_coords):
+                st.sidebar.code(f"{c['lat']:.5f}, {c['lon']:.5f}", language="text")
 
         # --- THE MAP ---
         fig = go.Figure()
@@ -212,7 +235,7 @@ DEPLOYED LOCATIONS:
                 bx, by = p.exterior.coords.xy
                 fig.add_trace(go.Scattermap(mode="lines", lon=list(bx), lat=list(by), line=dict(color="#444", width=1), showlegend=False, hoverinfo='skip'))
         
-        # 2. Incidents (NO HOVER)
+        # 2. Incidents
         sample = calls_in_city.to_crs(epsg=4326).sample(min(2000, len(calls_in_city)))
         fig.add_trace(go.Scattermap(
             lat=sample.geometry.y, 
@@ -223,21 +246,48 @@ DEPLOYED LOCATIONS:
             hoverinfo='skip'
         ))
 
-        # --- NEW: SHOT DETECTION LAYER ---
+        # 3. Shot Detection
         if show_shots and df_shots is not None:
-             # Filter shots to only those inside the view/jurisdiction (optional, but cleaner)
-             # For speed, we just plot all or you could implement the 'within(city_boundary)' logic like calls
              fig.add_trace(go.Scattermap(
                 lat=df_shots['lat'],
                 lon=df_shots['lon'],
                 mode='markers',
-                marker=dict(symbol='triangle', size=10, color='#FF4500', opacity=0.9), # Red Triangles
+                marker=dict(symbol='triangle', size=10, color='#FF4500', opacity=0.9),
                 name="Shot Detection",
                 text=df_shots['point_id'] if 'point_id' in df_shots.columns else None,
                 hoverinfo='text+lat+lon'
             ))
+
+        # 4. SUGGESTED SITES (Dotted Circles)
+        for i, c in enumerate(suggested_coords):
+            # Calculate ring
+            angles = np.linspace(0, 2*np.pi, 50)
+            clats = c['lat'] + (2/69.172) * np.sin(angles)
+            clons = c['lon'] + (2/(69.172 * np.cos(np.radians(c['lat'])))) * np.cos(angles)
+            
+            # A) Dotted Ring (Simulated with Markers)
+            fig.add_trace(go.Scattermap(
+                lat=clats,
+                lon=clons,
+                mode='markers',
+                marker=dict(size=3, color='#00FFFF'), # Cyan Dots
+                name=f"Proposed Coverage {i+1}",
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            # B) Center Target
+            fig.add_trace(go.Scattermap(
+                lat=[c['lat']],
+                lon=[c['lon']],
+                mode='markers+text',
+                marker=dict(size=10, color='#00FFFF', symbol='circle'), 
+                text=[f"NEW SITE {i+1}"],
+                textposition="top center",
+                name=f"Suggestion {i+1}",
+                hoverinfo='text'
+            ))
         
-        # 3. Stations (Split into Ring and Center Dot)
+        # 5. Active Stations
         all_st_names = df_stations_all['name'].tolist()
         for s in active_data:
             color = STATION_COLORS[all_st_names.index(s['name']) % len(STATION_COLORS)]
@@ -245,9 +295,8 @@ DEPLOYED LOCATIONS:
             clats = s['lat'] + (2/69.172) * np.sin(angles)
             clons = s['lon'] + (2/(69.172 * np.cos(np.radians(s['lat'])))) * np.cos(angles)
             
-            # A) The Ring (No Hover, No Legend Entry)
             fig.add_trace(go.Scattermap(
-                lat=list(clats) + [clats[0]], # Close the loop
+                lat=list(clats) + [clats[0]], 
                 lon=list(clons) + [clons[0]], 
                 mode='lines', 
                 line=dict(color=color, width=4.5), 
@@ -255,12 +304,11 @@ DEPLOYED LOCATIONS:
                 showlegend=False
             ))
             
-            # B) The Center Dot (Hover Name Enabled, Big Size)
             fig.add_trace(go.Scattermap(
                 lat=[s['lat']], 
                 lon=[s['lon']], 
                 mode='markers', 
-                marker=dict(size=12, color=color), # Increased Size
+                marker=dict(size=12, color=color), 
                 name=s['name'],
                 hoverinfo='name'
             ))

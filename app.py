@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 from shapely.geometry import Point, Polygon, MultiPolygon
 from shapely.ops import unary_union
 import os
-import shutil
 import itertools
 
 # --- PAGE CONFIG ---
@@ -80,6 +79,8 @@ if call_data and station_data and len(shape_components) >= 3:
         selection = ctrl_col1.selectbox("📍 Active Jurisdiction Focus", options)
 
         gdf_all, active_gdf, city_boundary, name_col = process_geo_data(shp_path, selection)
+        
+        # Calculate UTM Zone for accurate buffering
         utm_zone = int((city_boundary.centroid.x + 180) / 6) + 1
         epsg_code = f"326{utm_zone}" if city_boundary.centroid.y > 0 else f"327{utm_zone}"
         city_m = active_gdf.to_crs(epsg=epsg_code).unary_union
@@ -92,7 +93,7 @@ if call_data and station_data and len(shape_components) >= 3:
         calls_in_city['point_idx'] = range(len(calls_in_city))
         
         # PRE-CALC
-        radius_m = 3218.69 
+        radius_m = 3218.69 # 2 Miles in meters
         station_metadata = []
         for i, row in df_stations_all.iterrows():
             s_pt_m = gpd.GeoSeries([Point(row['lon'], row['lat'])], crs="EPSG:4326").to_crs(epsg=epsg_code).iloc[0]
@@ -103,24 +104,30 @@ if call_data and station_data and len(shape_components) >= 3:
 
         # OPTIMIZER
         st.sidebar.header("🎯 Optimizer Controls")
-        k = st.sidebar.slider("Drones to Deploy", 1, len(station_metadata), min(2, len(station_metadata)))
+        
+        # MODIFICATION: Slider starts at 0 for "Full Generation Mode"
+        k = st.sidebar.slider("Existing Drones to Deploy (Set 0 to Generate All)", 0, len(station_metadata), min(2, len(station_metadata)))
         strategy = st.sidebar.radio("Optimization Goal", ("Maximize Call Volume", "Maximize Land Equity"))
 
-        combos = list(itertools.combinations(range(len(station_metadata)), k))
-        if len(combos) > 500: combos = combos[:500] 
-        
-        best_call_combo, max_calls = None, -1
-        best_geo_combo, max_area = -1, -1
-        
-        for combo in combos:
-            u_set = set().union(*(station_metadata[i]['indices'] for i in combo))
-            if len(u_set) > max_calls: max_calls = len(u_set); best_call_combo = combo
-            if strategy == "Maximize Land Equity":
-                u_geo = unary_union([station_metadata[i]['clipped_m'] for i in combo])
-                if u_geo.area > max_area: max_area = u_geo.area; best_geo_combo = combo
+        if k == 0:
+            active_names = []
+            st.sidebar.info("🧪 **Generation Mode Active**: Calculating optimal sites for 100% coverage...")
+        else:
+            combos = list(itertools.combinations(range(len(station_metadata)), k))
+            if len(combos) > 500: combos = combos[:500] 
             
-        default_sel = [station_metadata[i]['name'] for i in (best_call_combo if strategy == "Maximize Call Volume" else (best_geo_combo if best_geo_combo != -1 else best_call_combo))]
-        active_names = ctrl_col2.multiselect("📡 Current Drone List", options=df_stations_all['name'].tolist(), default=default_sel)
+            best_call_combo, max_calls = None, -1
+            best_geo_combo, max_area = -1, -1
+            
+            for combo in combos:
+                u_set = set().union(*(station_metadata[i]['indices'] for i in combo))
+                if len(u_set) > max_calls: max_calls = len(u_set); best_call_combo = combo
+                if strategy == "Maximize Land Equity":
+                    u_geo = unary_union([station_metadata[i]['clipped_m'] for i in combo])
+                    if u_geo.area > max_area: max_area = u_geo.area; best_geo_combo = combo
+            
+            default_sel = [station_metadata[i]['name'] for i in (best_call_combo if strategy == "Maximize Call Volume" else (best_geo_combo if best_geo_combo != -1 else best_call_combo))]
+            active_names = ctrl_col2.multiselect("📡 Current Drone List", options=df_stations_all['name'].tolist(), default=default_sel)
         
         # --- SHOT LAYER CONTROL ---
         st.sidebar.markdown("---")
@@ -130,8 +137,7 @@ if call_data and station_data and len(shape_components) >= 3:
         if shot_data:
             show_shots = st.sidebar.toggle("Show Shot Detection Events", value=False)
             if show_shots:
-                try:
-                    df_shots = pd.read_csv(shot_data)
+                try: df_shots = pd.read_csv(shot_data)
                 except: pass
 
         # --- METRICS ---
@@ -148,31 +154,46 @@ if call_data and station_data and len(shape_components) >= 3:
             inters = [active_bufs[i].intersection(active_bufs[j]) for i in range(len(active_bufs)) for j in range(i+1, len(active_bufs)) if not active_bufs[i].intersection(active_bufs[j]).is_empty]
             overlap_perc = (unary_union(inters).area / city_m.area * 100) if inters else 0.0
 
-        # --- NEW: GAP ANALYSIS & SUGGESTIONS ---
+        # --- NEW: ITERATIVE COVERAGE GENERATOR ---
         suggested_coords = []
-        if land_perc < 99.9:
-            # 1. Calculate Uncovered Areas
-            covered_poly = total_union_geo if total_union_geo else Polygon()
-            uncovered_poly = city_m.difference(covered_poly)
+        
+        # Run generator if coverage is not complete
+        if land_perc < 99.0:
             
-            if not uncovered_poly.is_empty:
-                # 2. Extract significant gaps
-                gaps = [uncovered_poly] if isinstance(uncovered_poly, Polygon) else list(uncovered_poly.geoms)
-                # Sort by area to prioritize big holes
-                gaps = sorted(gaps, key=lambda x: x.area, reverse=True)
+            # Start with what we have (or empty if k=0)
+            current_covered = total_union_geo if total_union_geo else Polygon()
+            
+            # Create a working copy of the city area to "whittle down"
+            uncovered_poly = city_m.difference(current_covered)
+            
+            # Iterative Solver
+            max_iterations = 25 # Safety limit to prevent infinite loops
+            
+            for _ in range(max_iterations):
+                if uncovered_poly.is_empty or (uncovered_poly.area / city_m.area) < 0.01:
+                    break # Stop if <1% remains uncovered
                 
-                # 3. Generate centroids for top gaps
-                sug_points_m = []
-                for gap in gaps:
-                    if gap.area < 500000: continue # Ignore gaps smaller than ~0.5 sq km
-                    if len(sug_points_m) >= 5: break # Cap suggestions
-                    sug_points_m.append(gap.representative_point())
+                # Find the largest chunk of uncovered land
+                if isinstance(uncovered_poly, MultiPolygon):
+                    # Filter out tiny slivers
+                    valid_geoms = [g for g in uncovered_poly.geoms if g.area > 1000] 
+                    if not valid_geoms: break
+                    target_chunk = max(valid_geoms, key=lambda g: g.area)
+                else:
+                    target_chunk = uncovered_poly
                 
-                # 4. Convert back to Lat/Lon
-                if sug_points_m:
-                    gs_sug = gpd.GeoSeries(sug_points_m, crs=epsg_code).to_crs(epsg=4326)
-                    for p in gs_sug:
-                        suggested_coords.append({'lat': p.y, 'lon': p.x})
+                # Place a drone at a representative point inside that chunk
+                new_site_pt = target_chunk.representative_point()
+                
+                # Add to suggestions
+                # Transform back to Lat/Lon for storage
+                p_geo = gpd.GeoSeries([new_site_pt], crs=epsg_code).to_crs(epsg=4326).iloc[0]
+                suggested_coords.append({'lat': p_geo.y, 'lon': p_geo.x})
+                
+                # Update the 'Covered' area for the next iteration
+                new_coverage = new_site_pt.buffer(radius_m)
+                uncovered_poly = uncovered_poly.difference(new_coverage)
+
 
         # --- HEALTH SCORE ---
         norm_redundancy = min(overlap_perc / 39.0, 1.0) * 100
@@ -220,7 +241,7 @@ DEPLOYED ASSETS:
         # Show clickable suggestions list
         if suggested_coords:
             st.sidebar.markdown("### 💡 Recommended Sites")
-            st.sidebar.info("Coverage < 100%. Suggested new launch sites:")
+            st.sidebar.info(f"Generated {len(suggested_coords)} sites for coverage.")
             for i, c in enumerate(suggested_coords):
                 st.sidebar.code(f"{c['lat']:.5f}, {c['lon']:.5f}", language="text")
 
@@ -260,17 +281,17 @@ DEPLOYED ASSETS:
 
         # 4. SUGGESTED SITES (Dotted Circles)
         for i, c in enumerate(suggested_coords):
-            # Calculate ring
-            angles = np.linspace(0, 2*np.pi, 50)
+            # Calculate ring - INCREASED POINTS FOR BETTER VISIBILITY
+            angles = np.linspace(0, 2*np.pi, 100) # Increased to 100 points
             clats = c['lat'] + (2/69.172) * np.sin(angles)
             clons = c['lon'] + (2/(69.172 * np.cos(np.radians(c['lat'])))) * np.cos(angles)
             
             # A) Dotted Ring (Simulated with Markers)
             fig.add_trace(go.Scattermap(
-                lat=clats,
-                lon=clons,
+                lat=list(clats),
+                lon=list(clons),
                 mode='markers',
-                marker=dict(size=3, color='#00FFFF'), # Cyan Dots
+                marker=dict(size=4, color='#00FFFF'), # Cyan Dots
                 name=f"Proposed Coverage {i+1}",
                 hoverinfo='skip',
                 showlegend=False
@@ -280,7 +301,7 @@ DEPLOYED ASSETS:
                 lat=[c['lat']],
                 lon=[c['lon']],
                 mode='markers+text',
-                marker=dict(size=10, color='#00FFFF', symbol='circle'), 
+                marker=dict(size=12, color='#00FFFF', symbol='circle'), 
                 text=[f"NEW SITE {i+1}"],
                 textposition="top center",
                 name=f"Suggestion {i+1}",
